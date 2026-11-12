@@ -1,6 +1,6 @@
 # mediabox
 
-A small media app for the **R36S clone (GA36-MB, Allwinner A23) running goodluckOS**: an MP3 player, a PDF reader and an
+A small media app for the GoodluckOS ** Tested on R36S clone (GA36-MB, Allwinner A23) running goodluckOS**: an MP3 player, a PDF reader and an
 MP4 / MKV / AVI video player in one 640x480 controller-driven app.
 
 *(Türkçe özet için aşağıya bakın / Turkish summary below.)*
