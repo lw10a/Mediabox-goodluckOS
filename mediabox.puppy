@@ -1,0 +1,7 @@
+# mediabox: MP3 player + PDF reader + MP4 video player (English / Turkish UI).
+# Install as /home/player/.local/share/applications/mediabox.puppy
+[ENTRY]
+CATEGORY=Media
+NAME=Media
+DESCRIPTION=Music, books (PDF) and videos
+COMMAND=/home/player/ports/mediabox/mediabox

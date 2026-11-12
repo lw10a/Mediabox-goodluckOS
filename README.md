@@ -1,1 +1,61 @@
-# Mediabox-goodluckOS
+# mediabox
+
+A small media app for the **R36S clone (GA36-MB, Allwinner A23) running goodluckOS**: an MP3 player, a PDF reader and an
+MP4 / MKV / AVI video player in one 640x480 controller-driven app.
+
+*(Türkçe özet için aşağıya bakın / Turkish summary below.)*
+
+## Features
+- **Music**: MP3 playback with progress bar, seek, previous/next, shuffle and repeat. Keeps playing while you browse.
+- **Books**: PDF reader (MuPDF) with zoom, panning and automatic "continue where you left off".
+- **Videos**: H.264 / MPEG-4 video with AAC / MP3 / AC3 / Vorbis / Opus audio, seek, volume, fit/fill.
+- **Two interface languages**: English (default) and Turkish. Press **Y** on the main menu or pick the *Language* tile.
+- Folder browser (no giant flat lists), internal and external SD card supported.
+- No extra libraries needed on the console: FFmpeg and MuPDF are linked statically.
+
+## Quick start
+1. Fork or upload this repository to your own GitHub account.
+2. **Actions > build-mediabox > Run workflow**. The first build takes a while (MuPDF + FFmpeg are compiled under ARM
+   emulation); later builds are cached and much faster.
+3. Download **Artifacts > mediabox-armhf**, unzip it, copy `mediabox` to `/home/player/ports/mediabox/` on the console.
+4. Copy `mediabox.puppy` to `/home/player/.local/share/applications/` (next to `kennel.puppy`).
+5. Put your files in `/home/player/music`, `/home/player/books`, `/home/player/videos`
+   (or the same folders under `/media/external/` on the second card).
+
+Full instructions: **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)** (English) ·
+**[docs/KULLANIM_KILAVUZU.md](docs/KULLANIM_KILAVUZU.md)** (Türkçe).
+
+## Controls at a glance
+| Where | Keys |
+|---|---|
+| Menus | Up/Down choose, **A** open, **B** back, **L/R** page, **Start** now playing, **Y** language (main menu) |
+| Music | **A** pause, Left/Right seek 10 s, **L/R** previous/next, **X** shuffle, **Y** repeat, **Select** stop |
+| Video | **A** pause, Left/Right seek 10 s, **L/R** seek 1 min, Up/Down volume, **X** fit/fill, **B** quit |
+| PDF | **L/R** page, **L2/R2** 10 pages, **A** zoom, **X** fit page, D-pad pan, **B** back |
+
+## Repository layout
+```
+src/mediabox.c               the whole application (C, SDL2)
+Dockerfile                   builds MuPDF + a minimal static FFmpeg, then mediabox (armhf)
+.github/workflows/build.yml  GitHub Actions workflow that runs the Dockerfile
+mediabox.puppy               launcher entry for the goodluckOS / kennel menu
+docs/USER_GUIDE.md           user guide (English)
+docs/KULLANIM_KILAVUZU.md    kullanım kılavuzu (Türkçe)
+NOTICE.md                    third-party components and licenses
+```
+
+## Settings and data on the console
+- Language: `/home/player/.config/mediabox/settings.cfg` (`lang=en` or `lang=tr`)
+- PDF reading position: `/home/player/.config/mediabox/progress.tsv`
+
+## Licensing
+See [NOTICE.md](NOTICE.md). The built binary contains **MuPDF (AGPL-3.0)** and **FFmpeg (LGPL-2.1+)**, so if you
+distribute the binary publicly, publish the matching source (this repository) under an AGPL-3.0-compatible license.
+Choose and add a `LICENSE` file before making the repository public.
+
+---
+
+## Türkçe özet
+R36S klon konsolu (goodluckOS) için MP3 oynatıcı, PDF okuyucu ve MP4/MKV/AVI video oynatıcı. Arayüz **İngilizce
+(varsayılan)** ve **Türkçe**; ana menüde **Y** tuşuyla ya da *Dil* kutusuyla değişir. Kurulum ve tuşlar için
+[docs/KULLANIM_KILAVUZU.md](docs/KULLANIM_KILAVUZU.md) dosyasına bakın.
