@@ -1,7 +1,7 @@
 # mediabox
 
-A small media app for the GoodluckOS ** Tested on R36S clone (GA36-MB, Allwinner A23) running goodluckOS**: an MP3 player, a PDF reader and an
-MP4 / MKV / AVI video player in one 640x480 controller-driven app.
+A small media app for goodluckOS, tested on an **R36S clone (GA36-MB, Allwinner A23)**: an MP3 player, a PDF reader and
+an MP4 / MKV / AVI video player in one 640x480 controller-driven app.
 
 *(Türkçe özet için aşağıya bakın / Turkish summary below.)*
 
@@ -25,6 +25,9 @@ MP4 / MKV / AVI video player in one 640x480 controller-driven app.
 Full instructions: **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)** (English) ·
 **[docs/KULLANIM_KILAVUZU.md](docs/KULLANIM_KILAVUZU.md)** (Türkçe).
 
+For developers: **[ARCHITECTURE.md](ARCHITECTURE.md)** explains how the app works inside, and
+**[CONTRIBUTING.md](CONTRIBUTING.md)** explains how to build, test and send changes.
+
 ## Controls at a glance
 | Where | Keys |
 |---|---|
@@ -41,6 +44,9 @@ Dockerfile                   builds MuPDF + a minimal static FFmpeg, then mediab
 mediabox.puppy               launcher entry for the goodluckOS / kennel menu
 docs/USER_GUIDE.md           user guide (English)
 docs/KULLANIM_KILAVUZU.md    kullanım kılavuzu (Türkçe)
+ARCHITECTURE.md              internal structure: screens, players, threads, data flow
+CONTRIBUTING.md              how to build, test and contribute
+LICENSE                      GNU AGPL-3.0-or-later
 NOTICE.md                    third-party components and licenses
 ```
 
@@ -49,13 +55,15 @@ NOTICE.md                    third-party components and licenses
 - PDF reading position: `/home/player/.config/mediabox/progress.tsv`
 
 ## Licensing
-See [NOTICE.md](NOTICE.md). The built binary contains **MuPDF (AGPL-3.0)** and **FFmpeg (LGPL-2.1+)**, so if you
-distribute the binary publicly, publish the matching source (this repository) under an AGPL-3.0-compatible license.
-Choose and add a `LICENSE` file before making the repository public.
+mediabox is licensed under the **GNU Affero General Public License v3.0 or later**; see [LICENSE](LICENSE).
+The binary contains **MuPDF (AGPL-3.0)** and **FFmpeg (LGPL-2.1+)**, which is why the AGPL applies. Details and the
+list of third-party components are in [NOTICE.md](NOTICE.md).
 
 ---
 
 ## Türkçe özet
 R36S klon konsolu (goodluckOS) için MP3 oynatıcı, PDF okuyucu ve MP4/MKV/AVI video oynatıcı. Arayüz **İngilizce
 (varsayılan)** ve **Türkçe**; ana menüde **Y** tuşuyla ya da *Dil* kutusuyla değişir. Kurulum ve tuşlar için
-[docs/KULLANIM_KILAVUZU.md](docs/KULLANIM_KILAVUZU.md) dosyasına bakın.
+[docs/KULLANIM_KILAVUZU.md](docs/KULLANIM_KILAVUZU.md) dosyasına bakın. Geliştiriciler için
+[ARCHITECTURE.md](ARCHITECTURE.md) ve [CONTRIBUTING.md](CONTRIBUTING.md) dosyaları var; lisans AGPL-3.0'dır
+([LICENSE](LICENSE)).
