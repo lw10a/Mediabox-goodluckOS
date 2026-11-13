@@ -12,15 +12,7 @@ an MP4 / MKV / AVI video player in one 640x480 controller-driven app.
 - **Two interface languages**: English (default) and Turkish. Press **Y** on the main menu or pick the *Language* tile.
 - Folder browser (no giant flat lists), internal and external SD card supported.
 - No extra libraries needed on the console: FFmpeg and MuPDF are linked statically.
- ## Known Issues
-
-- **Music player navigation bug:** When music is playing in the background, pressing Start from the main menu opens the Now Playing screen. If Select is pressed to stop playback, an unexpected interface with unnamed tabs may appear. This issue is currently known and will be fixed in a future update.
- > [!NOTE]
-> This issue `Music player navigation bug` only occurs with the specific sequence of actions described above. It does not affect normal music playback or other Mediabox features.
-## Planned Features
-
-- **Video playback resume:** Automatically save playback progress and allow users to continue watching videos from where they left off in their next session.
-  
+ 
 ## Quick start
 > [!NOTE]
 > **No need to build Mediabox yourself!**
