@@ -14,6 +14,12 @@ an MP4 / MKV / AVI video player in one 640x480 controller-driven app.
 - No extra libraries needed on the console: FFmpeg and MuPDF are linked statically.
 
 ## Quick start
+> [!NOTE]
+> **No need to build Mediabox yourself!**
+>
+> Precompiled binaries are available on the [**Latest Releases**](https://github.com/lw10a/Mediabox-goodluckOS/releases/latest) page.
+>
+> Download `mediabox` and `mediabox.puppy` directly from Releases and follow the installation steps above. No Docker or cross-compilation required!
 1. Fork or upload this repository to your own GitHub account.
 2. **Actions > build-mediabox > Run workflow**. The first build takes a while (MuPDF + FFmpeg are compiled under ARM
    emulation); later builds are cached and much faster.
