@@ -15,7 +15,7 @@ an MP4 / MKV / AVI video player in one 640x480 controller-driven app.
  ## Known Issues
 
 - **Music player navigation bug:** When music is playing in the background, pressing Start from the main menu opens the Now Playing screen. If Select is pressed to stop playback, an unexpected interface with unnamed tabs may appear. This issue is currently known and will be fixed in a future update.
-- > [!NOTE]
+ > [!NOTE]
 > This issue `Music player navigation bug` only occurs with the specific sequence of actions described above. It does not affect normal music playback or other Mediabox features.
 ## Planned Features
 
