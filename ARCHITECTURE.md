@@ -193,14 +193,28 @@ sleeps 2 ms.
 - Decoder settings for slow CPUs: 2 threads (frame and slice), `skip_loop_filter = AVDISCARD_NONREF`, `FLAG2_FAST`.
 
 ### 7.5 Seeking
-1. The main thread sets `v_seek_to`, increments `v_seek_gen` (under the mutex), sets `v_seek_req` and enters buffering.
-   Repeated seeks are limited to one per 300 ms.
+1. The main thread sets `v_seek_to`, increments `v_seek_gen` (under the mutex), sets `v_seek_req` and enters buffering
+   (`v_do_seek`; key handling is debounced by the scrub logic described in 7.6).
 2. The decode thread notices the flag, calls `av_seek_frame` (backward to a key frame), flushes both decoders and
    resamples, clears both packet queues and the frame queue, resets the ring and sets the clock base.
 3. It records `v_seek_done = generation`. Buffering ends only when `v_seek_done == v_seek_gen`, so stale frames of an
    older position are never shown. Frames and audio before the target are discarded (`v_discard_until`).
 
-### 7.6 Shutdown
+### 7.6 Scrub seeking, resume and system volume
+- **Scrub seeking.** Left/Right/L/R do not seek immediately. `v_scrub()` accumulates a target (`v_scrub_acc`), the step
+  grows with hold time (x1, x2, x4, x9 after 0.6 s, 1.6 s and 3.2 s), playback is paused and the overlay shows the
+  target. After 450 ms without input (or on **A**) `v_scrub_commit_do()` performs one real seek through `v_do_seek()`.
+  This avoids flushing the decoders on every key repeat.
+- **Resume.** `video_progress.tsv` (`seconds<TAB>path`, newest 128) is read at start (`vprog_load`). `v_open` seeks to the
+  saved position through the normal seek protocol before the decode thread starts and shows a notice. The position
+  is written every 15 s, on exit and cleared at the end of the file (`v_save_pos`, `vprog_set`).
+- **System volume.** `libasound.so.2` is loaded with `dlopen` (no build dependency). `sysvol_get/sysvol_set` open the
+  default mixer, choose a playback control (`settings.cfg` `mixer=` override, else Master, Playback, PCM, Headphone,
+  Line Out, Speaker, Digital, else the first one), read or write it and close it again. The main thread (`v_tick`) polls it
+  every 0.8 s so changes made with the console's side buttons show up. Without ALSA the app uses its own gain in the
+  audio callback.
+
+### 7.7 Shutdown
 `v_close()` sets `v_abort`, joins the decode thread, closes the audio device, frees queues, codecs, the format context
 and textures. Starting a video first stops any MP3 playback (only one audio device is used at a time).
 
@@ -226,8 +240,9 @@ and textures. Starting a video first stops any MP3 playback (only one audio devi
 
 | File | Content |
 |---|---|
-| `/home/player/.config/mediabox/settings.cfg` | `lang=en` or `lang=tr` |
+| `/home/player/.config/mediabox/settings.cfg` | `lang=en` or `lang=tr`, optional `mixer=NAME` |
 | `/home/player/.config/mediabox/progress.tsv` | last page of each opened PDF |
+| `/home/player/.config/mediabox/video_progress.tsv` | resume position (seconds) of each video |
 
 ## 11. Build pipeline
 

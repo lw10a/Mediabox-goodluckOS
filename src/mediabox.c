@@ -17,6 +17,8 @@
 #include <libswscale/swscale.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <dlfcn.h>
+#include <strings.h>
 
 #define DR_MP3_IMPLEMENTATION
 #include "dr_mp3.h"
@@ -94,7 +96,7 @@ enum {
     X_ERR_MP3, X_ERR_AUDIO, X_LOADING, X_OPENING, X_ERR_PAGE, X_ERR_MUPDF, X_ERR_LOCKED, X_ERR_PDF,
     X_ZOOM_PAGE, X_ZOOM_WIDTH,
     X_ERR_VOPEN, X_ERR_VINFO, X_ERR_NOVID, X_ERR_VCODEC, X_ERR_VSIZE, X_ERR_VTEX, X_ERR_THREAD,
-    X_BUFFERING, X_VOL, X_DROPPED, X_FIT, X_FILL,
+    X_BUFFERING, X_VOL, X_DROPPED, X_FIT, X_FILL, X_RESUMED,
     X_H_OPEN, X_H_BACK, X_H_EXIT, X_H_PAGE, X_H_NOWPLAYING, X_H_SEEK, X_H_TRACK, X_H_PAUSE, X_H_STOP, X_H_LANG,
     X_HELP_MUSIC_T, X_HELP_MUSIC_1, X_HELP_MUSIC_2,
     X_HELP_VIDEO_T, X_HELP_VIDEO_1, X_HELP_VIDEO_2,
@@ -150,6 +152,7 @@ static const char *const STR[X_N][2] = {
     [X_DROPPED]     = {"Dropped", "Atlanan"},
     [X_FIT]         = {"Fit", "Sığdır"},
     [X_FILL]        = {"Fill", "Doldur"},
+    [X_RESUMED]     = {"Continuing from %s   (Y: start over)", "%s konumundan devam ediliyor   (Y: baştan)"},
     [X_H_OPEN]      = {"Open", "Aç"},
     [X_H_BACK]      = {"Back", "Geri"},
     [X_H_EXIT]      = {"Exit", "Çıkış"},
@@ -166,10 +169,10 @@ static const char *const STR[X_N][2] = {
     [X_HELP_MUSIC_2] = {"X shuffle    Y repeat    Select stop    B back (music keeps playing)",
                         "X karışık    Y tekrar    Select durdur    B geri (müzik çalmaya devam eder)"},
     [X_HELP_VIDEO_T] = {"Videos (MP4, MKV, AVI)", "Videolar (MP4, MKV, AVI)"},
-    [X_HELP_VIDEO_1] = {"A pause    < > seek 10 s    L/R seek 1 min",
-                        "A duraklat    < > 10 sn sar    L/R 1 dk sar"},
-    [X_HELP_VIDEO_2] = {"^ v volume    X fit / fill screen    B or Select quit",
-                        "^ v ses    X sığdır / doldur    B veya Select çık"},
+    [X_HELP_VIDEO_1] = {"A pause    < > seek (hold to speed up)    L/R 1 min steps",
+                        "A duraklat    < > sar (basılı tut, hızlanır)    L/R 1 dk adımlar"},
+    [X_HELP_VIDEO_2] = {"^ v volume    X fit / fill    Y start over    B quit (position is saved)",
+                        "^ v ses    X sığdır / doldur    Y baştan    B çık (konum kaydedilir)"},
     [X_HELP_BOOK_T]  = {"Books (PDF)", "Kitaplar (PDF)"},
     [X_HELP_BOOK_1]  = {"L/R page    L2/R2 10 pages    A zoom    X fit page",
                         "L/R sayfa    L2/R2 10 sayfa    A yakınlaştır    X sayfaya sığdır"},
@@ -185,6 +188,8 @@ static const char *const STR[X_N][2] = {
 };
 #define TX(id) (STR[id][lang])
 
+static char mixer_name[64];          /* settings.cfg: mixer=NAME (bos: otomatik sec) */
+
 static void settings_load(void) {
     FILE *f = fopen(SET_FILE, "r");
     if (!f) return;
@@ -192,6 +197,10 @@ static void settings_load(void) {
     while (fgets(l, sizeof l, f)) {
         if (strncmp(l, "lang=tr", 7) == 0) lang = L_TR;
         else if (strncmp(l, "lang=en", 7) == 0) lang = L_EN;
+        else if (strncmp(l, "mixer=", 6) == 0) {
+            snprintf(mixer_name, sizeof mixer_name, "%s", l + 6);
+            mixer_name[strcspn(mixer_name, "\r\n")] = 0;
+        }
     }
     fclose(f);
 }
@@ -201,6 +210,7 @@ static void settings_save(void) {
     FILE *f = fopen(SET_FILE, "w");
     if (!f) return;
     fprintf(f, "lang=%s\n", lang == L_TR ? "tr" : "en");
+    if (mixer_name[0]) fprintf(f, "mixer=%s\n", mixer_name);
     fclose(f);
 }
 
@@ -911,6 +921,166 @@ static void reader_draw(void) {
     pill(W - 10, H - 34, lab, C_DARK, C_TEXT);
 }
 
+/* ---------------------------------------------------------------- video konum kaydi */
+#define VP_N 128
+typedef struct { char path[MAXP]; int sec; } VProg;
+static VProg vprogs[VP_N];
+static int nvprogs;
+static const char *VPROG_FILE = "/home/player/.config/mediabox/video_progress.tsv";
+
+static int vprog_find(const char *p) {
+    for (int i = 0; i < nvprogs; i++) if (strcmp(vprogs[i].path, p) == 0) return i;
+    return -1;
+}
+static int vprog_get(const char *p) { int i = vprog_find(p); return i >= 0 ? vprogs[i].sec : 0; }
+static void vprog_write(void) {
+    mkdir(PROG_DIR, 0755);
+    FILE *f = fopen(VPROG_FILE, "w");
+    if (!f) return;
+    for (int i = 0; i < nvprogs; i++) fprintf(f, "%d\t%s\n", vprogs[i].sec, vprogs[i].path);
+    fclose(f);
+}
+static void vprog_load(void) {
+    FILE *f = fopen(VPROG_FILE, "r");
+    if (!f) return;
+    char l[MAXP + 32];
+    while (nvprogs < VP_N && fgets(l, sizeof l, f)) {
+        l[strcspn(l, "\r\n")] = 0;
+        char *tab = strchr(l, '\t');
+        if (!tab) continue;
+        *tab = 0;
+        int sec = atoi(l);
+        if (sec <= 0 || !tab[1]) continue;
+        snprintf(vprogs[nvprogs].path, sizeof vprogs[0].path, "%s", tab + 1);
+        vprogs[nvprogs].sec = sec;
+        nvprogs++;
+    }
+    fclose(f);
+}
+/* sec <= 0: kaydi sil. Aksi halde guncelle ve en sona (en yeni) tasi. */
+static void vprog_set(const char *p, int sec) {
+    int i = vprog_find(p);
+    if (sec <= 0) {
+        if (i < 0) return;
+        memmove(&vprogs[i], &vprogs[i + 1], sizeof(VProg) * (size_t)(nvprogs - i - 1));
+        nvprogs--;
+    } else {
+        if (i >= 0) {
+            if (vprogs[i].sec == sec) return;
+            VProg v = vprogs[i];
+            memmove(&vprogs[i], &vprogs[i + 1], sizeof(VProg) * (size_t)(nvprogs - i - 1));
+            vprogs[nvprogs - 1] = v;
+            vprogs[nvprogs - 1].sec = sec;
+        } else {
+            if (nvprogs == VP_N) { memmove(&vprogs[0], &vprogs[1], sizeof(VProg) * (VP_N - 1)); nvprogs--; }
+            snprintf(vprogs[nvprogs].path, sizeof vprogs[0].path, "%s", p);
+            vprogs[nvprogs].sec = sec;
+            nvprogs++;
+        }
+    }
+    vprog_write();
+}
+
+/* ---------------------------------------------------------------- sistem sesi (ALSA mixer, dlopen) */
+/* Yan ses tuslari sistem mixer'ini degistirir. Uygulama ayni mixer'i okur/yazar, boylece iki ses ayni kalir.
+ * libasound calisma aninda yuklenir; yoksa video kendi yazilim sesine geri doner. */
+typedef struct {
+    int tried, ok;
+    int (*mopen)(void **, int);
+    int (*attach)(void *, const char *);
+    int (*reg)(void *, void *, void **);
+    int (*load)(void *);
+    void *(*first)(void *);
+    void *(*next)(void *);
+    const char *(*name)(void *);
+    int (*active)(void *);
+    int (*hasvol)(void *);
+    int (*range)(void *, long *, long *);
+    int (*getv)(void *, int, long *);
+    int (*setall)(void *, long);
+    int (*mclose)(void *);
+} Alsa;
+static Alsa al;
+
+static int alsa_init(void) {
+    if (al.tried) return al.ok;
+    al.tried = 1;
+    void *h = dlopen("libasound.so.2", RTLD_LAZY);
+    if (!h) return 0;
+    *(void **)&al.mopen  = dlsym(h, "snd_mixer_open");
+    *(void **)&al.attach = dlsym(h, "snd_mixer_attach");
+    *(void **)&al.reg    = dlsym(h, "snd_mixer_selem_register");
+    *(void **)&al.load   = dlsym(h, "snd_mixer_load");
+    *(void **)&al.first  = dlsym(h, "snd_mixer_first_elem");
+    *(void **)&al.next   = dlsym(h, "snd_mixer_elem_next");
+    *(void **)&al.name   = dlsym(h, "snd_mixer_selem_get_name");
+    *(void **)&al.active = dlsym(h, "snd_mixer_selem_is_active");
+    *(void **)&al.hasvol = dlsym(h, "snd_mixer_selem_has_playback_volume");
+    *(void **)&al.range  = dlsym(h, "snd_mixer_selem_get_playback_volume_range");
+    *(void **)&al.getv   = dlsym(h, "snd_mixer_selem_get_playback_volume");
+    *(void **)&al.setall = dlsym(h, "snd_mixer_selem_set_playback_volume_all");
+    *(void **)&al.mclose = dlsym(h, "snd_mixer_close");
+    al.ok = al.mopen && al.attach && al.reg && al.load && al.first && al.next && al.name && al.active &&
+            al.hasvol && al.range && al.getv && al.setall && al.mclose;
+    return al.ok;
+}
+
+static void *mix_pick(void *mx) {
+    static const char *pref[] = {"Master", "Playback", "PCM", "Headphone", "Line Out", "Speaker", "Digital", NULL};
+    void *any = NULL, *best = NULL;
+    int bestrank = 99;
+    for (void *e = al.first(mx); e; e = al.next(e)) {
+        if (!al.active(e) || !al.hasvol(e)) continue;
+        const char *n = al.name(e);
+        if (mixer_name[0]) { if (strcasecmp(n, mixer_name) == 0) return e; continue; }
+        if (!any) any = e;
+        for (int i = 0; pref[i]; i++)
+            if (strcasecmp(n, pref[i]) == 0 && i < bestrank) { best = e; bestrank = i; }
+    }
+    if (mixer_name[0]) return NULL;
+    return best ? best : any;
+}
+
+static void *mix_open(void **elem) {
+    if (!alsa_init()) return NULL;
+    static const char *devs[] = {"default", "hw:0", NULL};
+    for (int i = 0; devs[i]; i++) {
+        void *mx = NULL;
+        if (al.mopen(&mx, 0) < 0 || !mx) continue;
+        if (al.attach(mx, devs[i]) < 0 || al.reg(mx, NULL, NULL) < 0 || al.load(mx) < 0) { al.mclose(mx); continue; }
+        *elem = mix_pick(mx);
+        if (*elem) return mx;
+        al.mclose(mx);
+    }
+    return NULL;
+}
+
+/* 0..100, kullanilamazsa -1 */
+static int sysvol_get(void) {
+    void *e = NULL, *mx = mix_open(&e);
+    if (!mx) return -1;
+    long lo = 0, hi = 0, v = 0;
+    int r = -1;
+    if (al.range(e, &lo, &hi) == 0 && hi > lo && al.getv(e, 0, &v) == 0)
+        r = (int)(((v - lo) * 100 + (hi - lo) / 2) / (hi - lo));
+    al.mclose(mx);
+    return r;
+}
+
+/* yeni yuzdeyi (aygitin adimina yuvarlanmis) dondurur, hata -1 */
+static int sysvol_set(int pct) {
+    void *e = NULL, *mx = mix_open(&e);
+    if (!mx) return -1;
+    long lo = 0, hi = 0;
+    int r = -1;
+    if (al.range(e, &lo, &hi) == 0 && hi > lo) {
+        long raw = lo + ((long)pct * (hi - lo) + 50) / 100;
+        if (al.setall(e, raw) == 0) r = (int)(((raw - lo) * 100 + (hi - lo) / 2) / (hi - lo));
+    }
+    al.mclose(mx);
+    return r;
+}
+
 /* ---------------------------------------------------------------- video (MP4) */
 /* Mimari: tek bir cozucu is parcacigi (demux + video + ses cozme). Ses, halka tamponla SDL ses
  * aygitina akar; ses saati ana saattir. Video kareleri kucuk bir kuyruga girer, ana dongu saate
@@ -951,6 +1121,14 @@ static double v_buf_pos, v_wall_base, v_dur;
 static int v_dropped, v_have_frame, v_osd_prev;
 static char v_title[300];
 static char v_err[160];
+static char v_path[MAXP];
+static int v_use_sysvol, v_sysvol = -1;
+static Uint32 v_sysvol_tick, v_save_tick;
+static int v_scrub_on, v_scrub_dir, v_scrub_was_paused;
+static double v_scrub_base, v_scrub_acc;
+static Uint32 v_scrub_t0, v_scrub_commit;
+static char v_notice[96];
+static Uint32 v_notice_until;
 
 static SDL_Texture *v_tex;
 static int v_tex_rgb, v_w, v_h;
@@ -1256,10 +1434,15 @@ static int v_open(const char *path) {
     scr = S_VIDEO;
     draw_center_msg(TX(X_OPENING));
     title_from_path(path, v_title, sizeof v_title);
+    snprintf(v_path, sizeof v_path, "%s", path);
     atomic_store(&v_abort, 0); atomic_store(&v_seek_req, 0); atomic_store(&v_eof, 0);
     v_seek_gen = v_seek_done = 0; v_discard_until = 0; v_last_vpts = 0;
     v_consumed = 0; v_clock_base = 0; v_dropped = 0; v_paused = 0; v_audio_done = 0;
     v_osd_until = SDL_GetTicks() + 3000; v_last_seek_tick = 0; v_osd_prev = 1;
+    v_scrub_on = 0; v_notice[0] = 0; v_save_tick = v_sysvol_tick = SDL_GetTicks();
+    v_vol = 100;
+    v_sysvol = sysvol_get();                           /* sistem mixer'i varsa tek ses kaynagi o */
+    v_use_sysvol = v_sysvol >= 0;
     v_ring_r = v_ring_w = v_ring_n = 0;
 
     if (avformat_open_input(&v_fmt, path, NULL, NULL) < 0) { snprintf(v_err, sizeof v_err, "%s", TX(X_ERR_VOPEN)); return 0; }
@@ -1316,6 +1499,20 @@ static int v_open(const char *path) {
 
     v_have_frame = 0; v_open_ok = 1;
     v_start_buffering(0.0);
+    {   /* kaldigin yerden devam */
+        int rs = vprog_get(path);
+        if (rs >= 10 && (v_dur <= 0 || rs < v_dur - 30)) {
+            pthread_mutex_lock(&v_mx);
+            v_seek_to = rs; v_seek_gen++;
+            pthread_mutex_unlock(&v_mx);
+            atomic_store(&v_seek_req, 1);
+            v_start_buffering(rs);
+            char tm[32];
+            fmt_time(tm, sizeof tm, rs);
+            snprintf(v_notice, sizeof v_notice, TX(X_RESUMED), tm);
+            v_notice_until = SDL_GetTicks() + 8000;
+        }
+    }
     if (pthread_create(&v_th, NULL, v_thread, NULL) != 0) { snprintf(v_err, sizeof v_err, "%s", TX(X_ERR_THREAD)); v_open_ok = 0; goto fail; }
     v_th_on = 1;
     return 1;
@@ -1348,11 +1545,7 @@ static void v_set_paused(int p) {
     if (v_adev) SDL_PauseAudioDevice(v_adev, v_paused || v_buffering);
 }
 
-static void v_seek_rel(double secs) {
-    Uint32 now = SDL_GetTicks();
-    if (now - v_last_seek_tick < 300) return;          /* tus tekrarini sinirla */
-    v_last_seek_tick = now;
-    double t = v_get_clock() + secs;
+static void v_do_seek(double t) {
     if (t < 0) t = 0;
     if (v_dur > 2 && t > v_dur - 1) t = v_dur - 1;
     pthread_mutex_lock(&v_mx);
@@ -1360,6 +1553,61 @@ static void v_seek_rel(double secs) {
     pthread_mutex_unlock(&v_mx);
     atomic_store(&v_seek_req, 1);
     v_start_buffering(t);
+}
+
+/* Sarma: tus basili tutuldukca adim buyur. Sarilirken goruntu durur, hedef gosterilir;
+ * tus birakilinca (450 ms sonra) tek bir gercek sarma yapilir. */
+static void v_scrub_commit_do(void) {
+    if (!v_scrub_on) return;
+    v_scrub_on = 0;
+    if (fabs(v_scrub_acc) >= 0.5) v_do_seek(v_scrub_base + v_scrub_acc);
+    v_set_paused(v_scrub_was_paused);
+}
+
+static void v_scrub(int dir, double step) {
+    Uint32 now = SDL_GetTicks();
+    if (!v_scrub_on) {
+        v_scrub_on = 1;
+        v_scrub_base = v_get_clock();
+        v_scrub_acc = 0;
+        v_scrub_t0 = now;
+        v_scrub_dir = dir;
+        v_scrub_was_paused = v_paused;
+        v_set_paused(1);
+    } else if (dir != v_scrub_dir) {
+        v_scrub_dir = dir;
+        v_scrub_t0 = now;
+    }
+    Uint32 held = now - v_scrub_t0;
+    double mult = held < 600 ? 1 : held < 1600 ? 2 : held < 3200 ? 4 : 9;
+    v_scrub_acc += dir * step * mult;
+    double hi = v_dur > 2 ? v_dur - 1 : 1e9, t = v_scrub_base + v_scrub_acc;
+    if (t < 0) t = 0;
+    if (t > hi) t = hi;
+    v_scrub_acc = t - v_scrub_base;
+    v_scrub_commit = now + 450;
+}
+
+static void v_save_pos(void) {
+    if (!v_open_ok || !v_path[0]) return;
+    double c = v_scrub_on ? v_scrub_base : v_get_clock();
+    if (c < 10 || (v_dur > 0 && c >= v_dur - 30)) vprog_set(v_path, 0);    /* basta ya da bitmis */
+    else vprog_set(v_path, (int)c);
+}
+
+static void v_vol_step(int dir) {
+    if (v_use_sysvol) {
+        int n = (v_sysvol < 0 ? 50 : v_sysvol) + dir * 5;
+        if (n < 0) n = 0;
+        if (n > 100) n = 100;
+        int r = sysvol_set(n);
+        if (r >= 0) v_sysvol = r;
+        else { v_use_sysvol = 0; v_vol = 100; }          /* mixer yazilamadi: yazilim sesine don */
+    } else {
+        v_vol += dir * 10;
+        if (v_vol > 200) v_vol = 200;
+        if (v_vol < 0) v_vol = 0;
+    }
 }
 
 static void v_show(AVFrame *f) {
@@ -1382,6 +1630,14 @@ static void v_show(AVFrame *f) {
 static void v_tick(void) {
     if (!v_open_ok) return;
     Uint32 now = SDL_GetTicks();
+    if (v_scrub_on && now >= v_scrub_commit) { v_scrub_commit_do(); dirty = 1; }
+    if (v_notice[0] && now >= v_notice_until) { v_notice[0] = 0; dirty = 1; }
+    if (!v_buffering && !v_paused && now - v_save_tick >= 15000) { v_save_tick = now; v_save_pos(); }
+    if (v_use_sysvol && now - v_sysvol_tick >= 800) {      /* yan tuslarla degisen sistem sesini yakala */
+        v_sysvol_tick = now;
+        int sv = sysvol_get();
+        if (sv >= 0 && sv != v_sysvol) { v_sysvol = sv; v_osd_until = now + 2500; dirty = 1; }
+    }
     pthread_mutex_lock(&v_mx);
     int qn = v_qn, rn = v_ring_n;
     int synced = v_seek_done == v_seek_gen;
@@ -1421,6 +1677,7 @@ static void v_tick(void) {
         int done = eof && v_qn == 0 && (!v_adev || v_ring_n == 0);
         pthread_mutex_unlock(&v_mx);
         if (done) {
+            vprog_set(v_path, 0);                          /* izlendi: konumu sil */
             v_close();
             scr = S_BROWSE;
             dirty = 1;
@@ -1435,17 +1692,32 @@ static void v_tick(void) {
 
 static void v_key(Key k) {
     if (!v_open_ok) { if (k == K_A || k == K_B) { v_close(); scr = S_BROWSE; } return; }
-    v_osd_until = SDL_GetTicks() + 3000;
+    Uint32 now = SDL_GetTicks();
+    v_osd_until = now + 3000;
     switch (k) {
-    case K_A: case K_START: v_set_paused(!v_paused); break;
-    case K_LEFT:  v_seek_rel(-10); break;
-    case K_RIGHT: v_seek_rel(10); break;
-    case K_L: v_seek_rel(-60); break;
-    case K_R: v_seek_rel(60); break;
-    case K_UP:   v_vol += 10; if (v_vol > 200) v_vol = 200; break;
-    case K_DOWN: v_vol -= 10; if (v_vol < 0) v_vol = 0; break;
+    case K_A: case K_START:
+        if (v_scrub_on) v_scrub_commit_do();               /* sarma sirasinda A: hemen git */
+        else v_set_paused(!v_paused);
+        break;
+    case K_LEFT:  v_scrub(-1, 10); break;
+    case K_RIGHT: v_scrub(1, 10); break;
+    case K_L: v_scrub(-1, 60); break;
+    case K_R: v_scrub(1, 60); break;
+    case K_UP:   v_vol_step(1); break;
+    case K_DOWN: v_vol_step(-1); break;
     case K_X: v_fit = !v_fit; break;
-    case K_B: case K_SELECT: v_close(); scr = S_BROWSE; break;
+    case K_Y:                                                /* "devam ediliyor" uyarisi varken: bastan basla */
+        if (v_notice[0] && now < v_notice_until) {
+            v_scrub_on = 0;
+            v_do_seek(0);
+            v_notice[0] = 0;
+        }
+        break;
+    case K_B: case K_SELECT:
+        v_save_pos();
+        v_close();
+        scr = S_BROWSE;
+        break;
     default: break;
     }
 }
@@ -1486,14 +1758,15 @@ static void v_draw(void) {
         int w = text_w(f_small, m) + 44;
         fill_rr((W - w) / 2, H / 2 - 24, w, 40, 20, C_DARK, 190);
         draw_text_center(f_small, m, W / 2, H / 2 - 15, C_TEXT, W - 80);
-    } else if (v_paused) {
+    } else if (v_paused && !v_scrub_on) {
         fill_circle(W / 2, H / 2 - 20, 42, C_DARK, 150);
         icon_pause(W / 2, H / 2 - 20, 16, C_TEXT);
     }
+    if (v_notice[0]) pill_l(14, 14, v_notice, C_DARK, C_TEXT);
     if (now < v_osd_until || v_paused || v_buffering) {
         fill_rr(14, H - 100, W - 28, 88, 14, C_DARK, 190);
         draw_text(f_small, v_title, 30, H - 94, C_TEXT, W - 60);
-        double cur = v_get_clock();
+        double cur = v_scrub_on ? v_scrub_base + v_scrub_acc : v_get_clock();
         if (v_dur > 0 && cur > v_dur) cur = v_dur;
         int bx = 30, bw = W - 60, by = H - 62;
         fill_rr(bx, by, bw, 8, 4, C_PILL, 255);
@@ -1511,10 +1784,17 @@ static void v_draw(void) {
         draw_text(f_small, tm, 58, H - 45, C_TEXT, 220);
         int xr = W - 30;
         snprintf(p, sizeof p, "%s: %d", TX(X_DROPPED), v_dropped);
-        xr = pill(xr, H - 44, p, C_PILL, C_DIM);
-        xr = pill(xr, H - 44, v_fit ? TX(X_FILL) : TX(X_FIT), C_PILL, C_TEXT);
-        snprintf(p, sizeof p, "%s %d%%", TX(X_VOL), v_vol);
-        pill(xr, H - 44, p, C_PILL, C_TEXT);
+        if (v_scrub_on) {
+            char q[32];
+            fmt_time(q, sizeof q, fabs(v_scrub_acc));
+            snprintf(p, sizeof p, "%s %c%s", TX(X_H_SEEK), v_scrub_acc < 0 ? '-' : '+', q);
+            xr = pill(xr, H - 44, p, CC_VIDEO, C_DARK);
+        } else {
+            xr = pill(xr, H - 44, p, C_PILL, C_DIM);
+            xr = pill(xr, H - 44, v_fit ? TX(X_FILL) : TX(X_FIT), C_PILL, C_TEXT);
+            snprintf(p, sizeof p, "%s %d%%", TX(X_VOL), v_use_sysvol ? v_sysvol : v_vol);
+            pill(xr, H - 44, p, C_PILL, C_TEXT);
+        }
     }
 }
 
@@ -1664,7 +1944,17 @@ static void draw_browse(void) {
         const char *label = ents[idx].name;
         if (!cwd[0] && ents[idx].type == T_DIR && nroots > 1)
             label = strncmp(ents[idx].path, "/media/external", 15) == 0 ? TX(X_EXTERNAL) : TX(X_INTERNAL);
-        draw_text(f_mid, label, 74, y + 4, C_TEXT, W - 120);
+        int lw = W - 120;
+        if (ents[idx].type == T_VID) {
+            int sc = vprog_get(ents[idx].path);
+            if (sc >= 10) {                                /* kaldigin yer */
+                char tm[32];
+                fmt_time(tm, sizeof tm, sc);
+                draw_text_right(f_tiny, tm, W - 28, y + 10, CC_VIDEO);
+                lw = W - 200;
+            }
+        }
+        draw_text(f_mid, label, 74, y + 4, C_TEXT, lw);
     }
     if (nent > rv) {                                  /* kaydirma cubugu */
         int th_ = rv * ROW_H - 4, bh = th_ * rv / nent;
@@ -1772,6 +2062,8 @@ static void draw_screen(void) {
 }
 
 /* ---------------------------------------------------------------- girdi */
+static Screen player_from = S_BROWSE;      /* oynaticiya hangi ekrandan girildi (B/Select oraya doner) */
+
 static void list_move(int d) {
     if (nent == 0) return;
     sel += d;
@@ -1791,7 +2083,7 @@ static void list_activate(void) {
     case T_CAT_HELP: scr = S_HELP; break;
     case T_VID: v_open(e->path); break;
     case T_DIR: { char p[MAXP]; snprintf(p, sizeof p, "%s", e->path); enter_dir(p); break; }
-    case T_MP3: playlist_from_browser(sel); if (playing() || play_err[0]) scr = S_PLAYER; break;
+    case T_MP3: playlist_from_browser(sel); if (playing() || play_err[0]) { player_from = S_BROWSE; scr = S_PLAYER; } break;
     case T_PDF: { char p[MAXP]; snprintf(p, sizeof p, "%s", e->path); reader_open(p); break; }
     }
 }
@@ -1814,8 +2106,8 @@ static void handle_key(Key k) {
         case K_R: track_step(1, 0); break;
         case K_X: shuffle = !shuffle; break;
         case K_Y: repeat_mode = (repeat_mode + 1) % 3; break;
-        case K_SELECT: track_close(); pl_free(); scr = S_BROWSE; break;
-        case K_B: scr = S_BROWSE; break;
+        case K_SELECT: track_close(); pl_free(); scr = player_from; break;
+        case K_B: scr = player_from; break;
         default: break;
         }
         return;
@@ -1828,7 +2120,7 @@ static void handle_key(Key k) {
     case K_R: case K_RIGHT: if (k == K_R) { sel += rows_visible(); if (sel >= nent) sel = nent - 1; if (sel < 0) sel = 0; } break;
     case K_A: list_activate(); break;
     case K_B: if (scr == S_HOME) running = 0; else go_up(); break;
-    case K_START: if (playing() || pl_n) scr = S_PLAYER; break;
+    case K_START: if (playing() || pl_n) { player_from = scr; scr = S_PLAYER; } break;
     case K_Y: if (scr == S_HOME) lang_toggle(); break;
     default: break;
     }
@@ -1936,6 +2228,7 @@ int main(void) {
 
     prog_load();
     settings_load();
+    vprog_load();
     show_home();
 
     int held = 0;
@@ -1970,6 +2263,7 @@ int main(void) {
         }
     }
 
+    if (scr == S_VIDEO && v_open_ok) v_save_pos();
     v_close();
     track_close();
     pl_free();
